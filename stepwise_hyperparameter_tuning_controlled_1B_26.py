@@ -1,0 +1,122 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Dec 16 16:03:51 2025
+
+@author: eldenbreejen
+"""
+
+# iterative hyperparameter tuning 
+import xgboost as xgb
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
+import matplotlib.pyplot as plt
+from model_training_functions_13 import performance_per_iteration, prepare_inputs
+
+palette = {'blue': '#2D69FF',
+           'blue_light': '#E1F0FF',
+           'red': '#FF694B',
+           'red_light': '#FEE1DB',
+           'green': '#35B179',
+           'green_light': '#DDFFEF',
+           'navy': '#070453'}
+
+dataset     = 'train3'
+date        = '2026-01-20_15-26'
+prediction_mode = 'controlled'
+n_splits    = 10
+
+
+# Get model inputs
+X, y, groups    = prepare_inputs(dataset, date, prediction_mode, feature_selection=True, logres=False)
+cv          = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=36)
+ 
+# step 1: n estimators
+
+params      = {
+    'eval_metric': 'auc',
+    'random_state': 36,
+    'n_estimators': 100
+    }
+
+performance_per_iteration(dataset, date, prediction_mode, params, step='1_1B', feature_selection=True)
+
+# step 2: tree specific parameters
+
+params['n_estimators'] = 7
+
+param_grid = {
+    'max_depth': [3,5,7],
+    'min_child_weight': [1,3,5]
+    }
+
+scoring = {'AUROC': 'roc_auc',
+           'AUPRC': 'average_precision'}
+
+model = xgb.XGBClassifier(**params)
+
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring=scoring, refit='AUROC', cv=cv, n_jobs=1, verbose=1, return_train_score = True)
+grid_search.fit(X, y, groups=groups)
+
+results = pd.DataFrame(grid_search.cv_results_)
+results = results[['param_max_depth', 'param_min_child_weight', 'mean_test_AUROC', 'std_test_AUROC', 'mean_train_AUROC', 'std_train_AUROC']]
+results.to_csv(f'P:/Emmelieve/output_{dataset}/{prediction_mode}/hyperparameter_tuning_step2_1B.csv')
+
+# step 3: tune subsampling parameters
+
+params['max_depth'] = 3
+params['min_child_weight'] = 1
+
+param_grid = {
+        'subsample': [0.6, 0.8, 1.0],           # default = 1 (lower prevents overfitting)
+        'colsample_bytree': [0.6, 0.8, 1.0]    # default = 1 (lower prevents overfitting)
+        }
+    
+model = xgb.XGBClassifier(**params)
+
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring=scoring, refit='AUROC', cv=cv, n_jobs=1, verbose=1, return_train_score = True)
+grid_search.fit(X, y, groups=groups)
+
+results = pd.DataFrame(grid_search.cv_results_)
+results = results[['param_subsample', 'param_colsample_bytree', 'mean_test_AUROC', 'std_test_AUROC', 'mean_train_AUROC', 'std_train_AUROC']]
+results.to_csv(f'P:/Emmelieve/output_{dataset}/{prediction_mode}/hyperparameter_tuning_step3_1B.csv')
+
+# step 4: Fine-tuning regularization parameters
+
+params['subsample'] = 0.6
+params['colsample_bytree'] = 0.8
+
+param_grid = {
+    'alpha': [0, 0.01, 0.1, 1, 10, 100],
+    'lambda': [0, 0.01, 0.1, 1, 10, 100]
+    }
+
+model = xgb.XGBClassifier(**params)
+
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring=scoring, refit='AUROC', cv=cv, n_jobs=1, verbose=1, return_train_score = True)
+grid_search.fit(X, y, groups=groups)
+
+results = pd.DataFrame(grid_search.cv_results_)
+results = results[['param_alpha', 'param_lambda', 'mean_test_AUROC', 'std_test_AUROC', 'mean_train_AUROC', 'std_train_AUROC']]
+results.to_csv(f'P:/Emmelieve/output_{dataset}/{prediction_mode}/hyperparameter_tuning_step4_1B.csv')
+
+# step 5: lower  learning rate & re-run step 1
+params['alpha'] = 1
+params['lambda'] = 0.1
+
+params['learning_rate'] = 0.01
+params['n_estimators'] = 100
+
+performance_per_iteration(dataset, date, prediction_mode, params, step='2_1B')
+
+# conclusion
+params = {'eval_metric': 'auc',
+        'random_state': 36,
+        'n_estimators': 25,
+        'max_depth': 3,
+        'min_child_weight': 1,
+        'subsample': 0.6,
+        'colsample_bytree': 0.8,
+        'alpha': 1,
+        'lambda': 0.1,
+        'learning_rate': 0.01}
